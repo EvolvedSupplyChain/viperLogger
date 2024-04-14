@@ -1,0 +1,46 @@
+{
+  "NAME": "test",
+  "USER": "Andy@freddy.io",
+  "UID": "blah",
+  "LOCALE": [0.0000,0.0000],
+  "TENANT": "andy",
+  "CONTEXT": "outdoor",
+  "SSID": "IPCAM",
+  "WIPASS": "spycams!",
+  "BROKER": "20.236.13.82",
+  "TELEMTOPIC": "viper/telem/{}/{}",
+  "CCTOPIC": "viper/cc/{}/{}",
+  "LOGTOPIC": "viper/log/{}/{}",
+  "STATUSTOPIC": "viper/status/{}/{}",
+  "PREFIX": "plantname",
+  "QTY": 3,
+  "LOGINTERVAL": 5,
+  "OFFLINELOGINTERVAL": 300,
+  "SENSORPREF":  [
+      {"NAME": "AS7265X",
+      "GAIN": "AS7265X_GAIN_16X",
+      "BULBS": false},
+      {"NAME": "TSL2591",
+      "GAIN": "GAIN_LOW"}
+      ],
+  "UPDATEPATH": "https://raw.githubusercontent.com/EvolvedSupplyChain/finalSetupTest/main",
+  "GITUSER": "EvolvedSupplyChain",
+  "GITREPO": "ugitTest",
+  "FILEMANIFEST": [
+    {
+      "FILENAME": "logger.py",
+      "VERSION": "3",
+      "CHECKFLAG": true
+    },
+    {
+      "FILENAME": "test.txt",
+      "VERSION": "6",
+      "CHECKFLAG": false
+    }
+  ],
+  "BOOTMODE": 0,
+  "FORCECONFIG": false,
+  "FIRSTRUN": false,
+  "LASTUPDATECHECK": 0,
+  "SAVEDDATA": false
+}
