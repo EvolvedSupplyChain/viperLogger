@@ -46,26 +46,18 @@ ignore = ignore_files
 # Static URLS
 # GitHub uses 'main' instead of master for python repository trees
 giturl = 'https://github.com/{user}/{repository}'
-#call_trees_url = f'https://api.github.com/repos/{user}/{repository}/git/trees/{default_branch}?recursive=1'
-call_trees_url = f'https://api.github.com/repos/{user}/{repository}/git/trees/release?recursive=1'
+call_trees_url = f'https://api.github.com/repos/{user}/{repository}/git/trees/{default_branch}?recursive=1'
+#call_trees_url = f'https://api.github.com/repos/{user}/{repository}/git/trees/release?recursive=1'
 raw = f'https://raw.githubusercontent.com/{user}/{repository}/master/'
 
-def pull(f_path,raw_url = raw):
+def pull(f_path,raw_url):
   print(f'pulling {f_path} from github')
   #files = os.listdir()
   headers = {'User-Agent': 'ugit-turfptax'} 
   # ^^^ Github Requires user-agent header otherwise 403
   if len(token) > 0:
       headers['authorization'] = "bearer %s" % token 
-  r = urequests.get(raw_url + f_path, headers=headers)
-  if f_path in os.listdir():
-      try:
-          os.remove(f_path)
-      except:
-          pass
-  else:
-      pass
-    
+  r = urequests.get(raw_url, headers=headers)
   try:
     new_file = open(f_path, 'w')
     new_file.write(r.content.decode('utf-8'))
@@ -257,3 +249,4 @@ def backup():
     backup = open('ugit.backup','w')
     backup.write(backup_text)
     backup.close()
+
