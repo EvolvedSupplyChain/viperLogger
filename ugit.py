@@ -25,13 +25,17 @@ with open("config.json",'r') as f:
 ssid = config["SSID"]
 password = config["WIPASS"]
 
+with open("updatePaths.json",'r') as f:
+    updatePaths = json.load(f)
 # CHANGE TO YOUR REPOSITORY INFO
 # Repository must be public if no personal access token is supplied
-user = config["GITUSER"]
-repository = config["GITREPO"]
+user = updatePaths["GITUSER"]
+repository = updatePaths["GITREPO"]
 token = ''
 # Change this variable to 'master' or any other name matching your default branch
-default_branch = 'main'
+
+#default_branch = 'main'
+default_branch = updatePaths["GITBRANCH"]
 
 # Don't remove ugit.py from the ignore_files unless you know what you are doing :D
 # Put the files you don't want deleted or updated here use '/filename.ext'
@@ -249,3 +253,4 @@ def backup():
     backup = open('ugit.backup','w')
     backup.write(backup_text)
     backup.close()
+
