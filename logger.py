@@ -1,61 +1,125 @@
-import utime
-#import os
+'''
+ESC Viper Main Logging Loop
+logger.py
+A. Liebig for ESC
+4/13/24
+'''
+
 import time
-import bmp280
-import aht10
+import json
 import onewire
-import ds18x20
-import as7265x
-import TSL2591
+import ds18x20 #Temperature probe
+import as7265x #Photospectrometer
+import TSL2591 #Luminosity Sensor
 import network
 import socket
-import secretVars
 import ubinascii
-import json
+import machine
+import ugit #OTA Updater
+import scd40 #Atmospheric CO2 Sensor
 import gc
 import struct
-from camera import *
+import bme280 #Atmospheric Sensor
+import traceback
 from umqttsimple import MQTTClient
-#from ota import OTAUpdater
-from machine import Pin, SPI, I2C, ADC, RTC, unique_id
 
-gc.collect()
+#TODO: power optimizations
 
-logTime = 5
+#global flag varaibles for non persistent system states:
+#wifiConnected = False
+#validIP = False
+#mqttConnected = False
+
+#load the configuration:
+with open("config.json",'r') as f:
+    config = json.load(f)
+
+offlineMode = False
+UID = ubinascii.hexlify(machine.unique_id())
+
+telemTopic = config["TELEMTOPIC"].format(config["TENANT"],UID.decode())
+ccTopic = config["CCTOPIC"].format(config["TENANT"],UID.decode())
+logTopic = config["LOGTOPIC"].format(config["TENANT"],UID.decode())
+statusTopic = config["STATUSTOPIC"].format(config["TENANT"],UID.decode())
+
+print(telemTopic)
 
 
-print("OTA debug day two take 3")
-#from Arducam import *
-#from camera import *
+#connect to wifi:
+try:
+    station = network.WLAN(network.STA_IF)
+    station.active(True)
+    station.connect(config["SSID"], config["WIPASS"])
+except Exception as error:
+    #errorHandler("wifi setup", error, traceback.print_stack())
+    print("wifi error")
+time.sleep(1)
 
-'''OTA Updater'''
-#firmware_url = "https://raw.githubusercontent.com/EvolvedSupplyChain/agriculture/main/"
-#updateFile = "main.py"
-#updateFilesList = []
-
-#otaClient = OTAUpdater(secretVars.ssid, secretVars.wifiPassword, firmware_url, "logger.py")
-#otaClient = OTAUpdater(secretVars.ssid, secretVars.wifiPassword, firmware_url, updateFile)
-#otaClient.download_and_install_update_if_available()
-#otaClient.download_and_install_update_if_available()
-
-time.sleep(3)
-
-'''wifi connection:'''
-station = network.WLAN(network.STA_IF)
-station.active(True)
-station.connect(secretVars.ssid, secretVars.wifiPassword)
-
-time.sleep(3)
+firstConAttempts = 0
 
 while station.isconnected() == False:
-    pass
+    
+    firstConAttempts += 1
+    
+    if firstConAttempts < 10:
+        print("not connected")
+        time.sleep(2)
+        
+    elif firstConAttempts == 10:
+        print("having trouble connecting, waiting and trying again")
+        time.sleep(15)
+        
+    elif firstConAttempts >= 20:
+        print("can't make wifi connection, going to offline mode")
+        offlineMode = True
+        break
+        
 print(station.ifconfig())
 
-time.sleep(2)
-'''Time Check and Clock Set:'''
-NTP_DELTA = 2208988800   #Adjust this for time zone
+#statusHandler("wifi connection", "connected successfully")
+
+time.sleep(1)
+
+#log exceptions and stack trace
+def errorHandler(source, message, trace):
+    with open("errorlog.txt",'a') as f:
+        f.write("\nNew exception at " + str(rtClock.datetime()) + ": ")
+        f.write("\n\tSource: " + source + "\n\tMessage: " + str(message) + "\n\tTrace: " + str(trace) + "\n")
+        
+    try:
+        logPayload = {
+                        "Source": source,
+                        "Message": message,
+                        "Trace": trace
+                      }
+        print(logPayload)
+        client.publish(logTopic, json.dump(logPayload).encode())
+    except:
+        pass
+
+#log status events:
+def statusHandler(source, message):
+    statusPayload = {
+                        "Source": source,
+                        "Message": message,
+                        "Time": rtClock.datetime()
+                    }
+    try:
+        client.publish(statusTopic, json.dump(statusPayload).encode())
+    except Exception as error:
+        errorHandler("status message publish", error, traceback.print_stack())
+        #TODO: do something here, maybe just an additional note in local log
+
+
+#test the internet connection:
+boxIP = station.ifconfig()
+wifiConnected = True
+
+
+#setup the RTC
+NTP_DELTA = 3155673600 + 25200   #Adjust this for time zone
 timeHost = "pool.ntp.org"
-rtClock = RTC()
+rtClock = machine.RTC()
 
 def set_time():
     # Get the external time reference
@@ -76,411 +140,432 @@ def set_time():
     t = time.gmtime(tm)
     rtClock.datetime((t[0],t[1],t[2],t[6]+1,t[3],t[4],t[5],0))
 
-set_time()
-time.sleep(2)
-print(time.localtime())
-lastUpdateCheck = time.time()
-
-'''OTA Updater'''
-#firmware_url = "https://raw.githubusercontent.com/EvolvedSupplyChain/agriculture/main/"
-#updateFile = "main.py"
-#updateFilesList = []
-
-#otaClient = OTAUpdater(secretVars.ssid, secretVars.wifiPassword, firmware_url, "main.py")
-#otaClient = OTAUpdater(secretVars.ssid, secretVars.wifiPassword, firmware_url, updateFile)
-#otaClient.download_and_install_update_if_available()'''
+try:
+    set_time()
+except Exception as error:
+    print(error)
+    errorHandler("set rt clock", error, traceback.print_stack())
 
 
-'''MQTT:'''
+if config["LASTUPDATECHECK"] == 0: #or config["LASTUPDATECHECK"]
+    config["LASTUPDATECHECK"] = time.mktime(rtClock.datetime())
+else:
+    pass
 
+#lastUpdateCheck = config["LASTUPDATECHECK"]
+
+#setup the auto updater:
+
+#Instantiate MQTT client and define callbacks:
 def sub_cb(topic, msg):
   print((topic, msg))
-  if topic == secretVars.ccTopic:
+  if topic == ccTopic:
     decodedMsg = json.loads(msg)
     subject = decodedMsg.get("subject")
     #print('Topic: ' + topic + 'Message: ' + msg)
-    if subject == b"returnSettings":
+    if subject == "returnSettings":
+        '''
         theSettings = {
-            "loggingInterval": logTime,
+            "loggingInterval": 25,
             "spectralGain": "16x"
             }
-        client.publish(secretVars.ccTopic, json.dumps(theSettings).encode())
-    elif subject == b"changeSettings":
+        '''
+        print("send the config")
+        client.publish(ccTopic, json.dumps(config).encode())
+    elif subject == "changeSettings":
         #change device settings
+        
+        #TODO: if sent parameter(s) in config/config.json, validate value and save
+        print("settings change requested")
         pass
-    elif subject == b"checkForUpdate":
-        #otaClient.download_and_install_update_if_available()
-        #client.publish(secretVars.ccTopic, b"Checking for updates...")
-        v = open("updateFlag.txt","w")
-        v.write("1")
-        v.close()
-        machine.reset()
-    '''match msg:
-        case "setProp":
-            print(msg)
-        case "reboot":
-            print(msg)
-        case _:
-            print(msg)'''
-            #parse the incoming JSON and extract some "messageType" variable, take appropriate action 
+    elif subject == "checkForUpdate":
+        try:
+            print("call the updater")
+            import ugit
+            config["LASTUPDATECHECK"] = time.mktime(rtClock.datetime())
+            with open("config.json", 'w') as f:
+                json.dump(config, f)
+            ugit.pull_all(isconnected = True)
+            
+        except Exception as error:
+            errorHandler("updater pull all", error, traceback.print_stack())
+            
+    elif subject == "forceFileUpdate":
+        print("manually update file: " + msg)
+        try:
+            import ugit
+            ugit.pull(msg)
+        except Exception as error:
+            errorHandler("manual file update", error, traceback.print_stack())
         
   else:
     print('message recieved: ' + msg)
+    
+    
+disconMsg = "Client " + str(UID) + " has disconnected unexpectedly at " + str(rtClock.datetime())
+'''
+#set lw&t to notify of disconnect:
+disconMsg = "Client " + UID + " has disconnected unexpectedly at " + rtClock.datetime()
+client.set_last_will(config["TELEMTOPIC"],disconMsg)
 
 def connect_and_subscribe():
   global client_id, mqtt_server, topic_sub
-  client = MQTTClient(secretVars.clientID, secretVars.brokerAddress, keepalive=60)
+  client = MQTTClient(ubinascii.hexlify(machine.unique_id()), config["BROKER"], keepalive=60)
   client.set_callback(sub_cb)
   client.connect()
-  client.subscribe(secretVars.ccTopic)
-  print('Connected to %s MQTT broker, subscribed to %s topic' % (secretVars.brokerAddress, secretVars.ccTopic))
+  client.subscribe(config["CCTOPIC"])
+  print('Connected to %s MQTT broker, subscribed to %s topic' % (config["BROKER"], config["CCTOPIC"]))
   return client
 
 client = connect_and_subscribe()
+'''
+client = MQTTClient(ubinascii.hexlify(machine.unique_id()), config["BROKER"], keepalive=60)
+client.set_callback(sub_cb)
+client.set_last_will(statusTopic,disconMsg)
 
+try:
+    client.connect()
+except Exception as error:
+    print(error)
+    errorHandler("mqtt connect", error, traceback.print_stack())
+else:
+    client.subscribe(ccTopic)
+#TODO: mqtt connection checking and error catching, SSL/TLS, mqtt last will
 
-#pre allocate the image variables to avoid fragmentation issues:
-gc.collect()
-#theBytes = bytearray(16000)
-#the64Bytes = bytearray(6000)
-#otaClient.download_and_install_update_if_available()
+#declare I2C and SPI busses for sensors:
+try:
+    sensorBus = machine.I2C(0,scl=machine.Pin(12),sda=machine.Pin(11))
+    time.sleep(1)
+except Exception as error:
+    errorHandler("I2C init", error, traceback.print_stack())
 
-'''ambient temp, humidity, and pressure sensors:'''
-ambientPower = Pin(22, Pin.OUT)
-ambientPower.value(1)
+#total luminosity sensor:
+try:
+    totalLuxSense = TSL2591.TSL2591(sensorBus)
+    totalLuxSense.gain = TSL2591.GAIN_LOW
+    #totalLuxSense.gain = config["SENSORPREF"][1]["GAIN"]
+    totalLuxPresent = True
+except Exception as error:
+    print(error)
+    errorHandler("lux sensor init", error, traceback.print_stack)
+    totalLuxPresent = False
+#TODO: add totalLuxSense.gain = config["SENSORPREF"]["TSL2591"]["GAIN"]
+
+#spectral triad light sensor:
+#add I2C scan to make sure spectral triad is installed
+specTriadPresent = True
+
+try:
+    specTriad = as7265x.AS7265X(sensorBus)
+    time.sleep_ms(500)
+    specTriad.disable_indicator()
+    time.sleep_ms(500)
+    specTriad.disable_bulb(as7265x.AS7265x_LED_WHITE)
+    specTriad.disable_bulb(as7265x.AS7265x_LED_IR)
+    specTriad.disable_bulb(as7265x.AS7265x_LED_UV)
+    time.sleep_ms(500)
+except Exception as error:
+    print(error)
+    specTriadPresent = False
+    errorHandler("spec triad init", error, traceback.print_stack())
+
+#TODO: add specTriad.set_gain = config["SENSORPREF"]["TSL2591"]["GAIN"]
+
+#BME 280 Environmental Sensor
+try:
+    bmeAtmospheric = bme280.BME280(i2c=sensorBus)
+except Exception as error:
+    errorHandler("BME 280 connection", error, traceback.print_stack())
+    print(error)
 time.sleep(1)
-ambientI2CBus = I2C(0,scl=Pin(1),sda=Pin(0))
-time.sleep(2)
-tempHum = aht10.AHT10(ambientI2CBus)
-time.sleep(2)
-tempPres = bmp280.BMP280(ambientI2CBus)
-time.sleep(2)
-tempPres.use_case(bmp280.BMP280_CASE_INDOOR)
-time.sleep(2)
 
-'''spectral and lux sensors:'''
-lightPower = Pin(20, Pin.OUT)
-lightPower.value(1)
-time.sleep(3)
-spectralI2CBus = I2C(1,scl=Pin(7),sda=Pin(6))
-time.sleep(3)
-specTriad = as7265x.AS7265X(spectralI2CBus)
-time.sleep(3)
-specTriad.disable_indicator()
-time.sleep_ms(500)
-specTriad.disable_bulb(as7265x.AS7265x_LED_WHITE)
-specTriad.disable_bulb(as7265x.AS7265x_LED_IR)
-specTriad.disable_bulb(as7265x.AS7265x_LED_UV)
-time.sleep_ms(500)
-#specTriad.set_measurement_mode(as7265x.AS7265X_MEASUREMENT_MODE_6CHAN_CONTINUOUS)
-#specTriad.begin()
-#specTriad.disableBulb(as7265x.LED_WHITE)
-#specTriad.disableBulb(as7265x.LED_IR)
-#specTriad.disableBulb(as7265x.LED_UV)
-#luxSense = tsl2591.Tsl2591(spectralI2CBus)
-luxSense = TSL2591.TSL2591(spectralI2CBus)
+#SDC40 CO2 Sensor:
+try:
+    scd40CO2 = scd40.SCD4X(sensorBus)
+except:
+    print("co2 error")
+    pass
 
-'''temp and moisture probes:'''
-tempProbeData = Pin(2)
-tempProbePower = Pin(3, Pin.OUT)
-tempProbePower.value(1)
-#moistureProbeData = Pin(4, Pin.IN)
-moistureProbeDataPin = Pin(26, Pin.IN)
-moistureProbeData = ADC(moistureProbeDataPin)
-offsetPin = ADC(Pin(27, Pin.IN))
+time.sleep(1)
+try:
+    scd40CO2.start_periodic_measurement()
+except Exception as error:
+    errorHandler("CO2 start readings", error, traceback.print_stack())
+time.sleep(1)
 
-#moistureProbeData = ADC(0)
+#TODO: cross checking and correlation between BME 280 and SCD40 for temp, hum
 
-moistureProbePower = Pin(21,Pin.OUT)
-moistureProbePower.value(1)
+#Onewire Temp Probe Sensors:
+tempProbePin = machine.Pin(13)
 
-'''Camera:'''
+try:
+    tempProbeBus = ds18x20.DS18X20(onewire.OneWire(tempProbePin))
+    probeTemps = tempProbeBus.scan()
+except Exception as error:
+    errorHandler("temp probe init", error, traceback.print_stack())
 
-#take_image()
-#time.sleep(3)
+#Analog Moisture Probe Sensors:
+moistProbePins = [machine.ADC(9)]
+#TODO: moisture probe power pin, switch off when not in use.
 
-
-'''analog data mapping function:'''
-def convert(x, in_min, in_max, out_min, out_max):
-    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
-
-'''update call'''
-#run the RTC NTP update
-#open a text file with logs of previous updates and update checks
-#compare last update check time from file to clock
-#run updater if needed, log details and close the file
-#collect garbage
-
-#listen on MQTT command channel for forced update
-
-'''main program:'''
+#Main logging loop:
 def main():
-    #testMsg = bytearray(15000)
-    #run the updater
-    #otaClient.download_and_install_update_if_available()
-    #check for MQTT messages
-    
-    
-    #check the clock and compare to update flag, run update function if needed
-    
-    tempBus = ds18x20.DS18X20(onewire.OneWire(tempProbeData))
-    temps = tempBus.scan()
-    
+    global config
+    global offlineMode
     while True:
+        tempProbeValues = []
+        moistProbeValues = []
+        luxData = {"TOTAL":0,
+                   "IR":0,
+                   "VIS":0,
+                   "FULLSPEC":0}
         
-        soilMoist = 0
-        tempList = []
-        tempBus.convert_temp()
-        time.sleep_ms(800)
-        for i in temps:
-            tempList.append(tempBus.read_temp(i))
+        lightSpectrumData = {"IR":
+                                 {"R":0.0,
+                                  "S":0.0,
+                                  "T":0.0,
+                                  "U":0.0,
+                                  "V":0.0,
+                                  "W":0.0
+                                  },
+                             "VIS":
+                                 {"G":0.0,
+                                  "H":0.0,
+                                  "I":0.0,
+                                  "J":0.0,
+                                  "K":0.0,
+                                  "L":0.0
+                                  },
+                             "UV":
+                                 {"A":0.0,
+                                  "B":0.0,
+                                  "C":0.0,
+                                  "D":0.0,
+                                  "E":0.0,
+                                  "F":0.0
+                                   }
+                             }
+        atmosphericData = {
+                          "BME280":
+                               {
+                                "TEMP":0.0,
+                                "PRESSURE":0.0,
+                                "HUMIDITY":0.0,
+                                "DEWPOINT":0.0,
+                                "ALTITUDE":0.0
+                                },
+                           "SCD40":
+                               {
+                                "TEMP":0.0,
+                                "HUMIDITY":0.0,
+                                "CO2":0.0
+                                }
+                           }
         
-        #ambientData = [0,tempPres.temperature,tempPres.pressure,0]
+        #Log atmospheric conditions:
         
-        #ambientData = [tempHum.temperature(),tempPres.temperature,tempPres.pressure,tempHum.humidity()]
-        ambientData = [tempHum.temperature(),tempPres.temperature,tempPres.pressure,tempHum.humidity(),tempHum.dew_point()]
-        
-        
-        #moistureProbePower.value(1)
-        time.sleep(2)
-        soilMoist = moistureProbeData.read_u16()
-        offsetReading = offsetPin.read_u16()
-        time.sleep_ms(500)
-        print(soilMoist)
-        print(offsetReading)
-        
-        soilMoist = soilMoist - offsetReading
-        
-        soilMoist = soilMoist * 3.2 / 65535
-        #moistureProbePower.value(0)
-        #soilMoist = soilMoist * (3.3 / 65535) 
-        #soilMoist = (3.3 - soilMoist) / 3.3 * 100
-        #soilMoist = convert(soilMoist, 0, 65535, 100, 0)
-        
-        
-        
-        #fullLux, irLux = luxSense.get_full_luminosity()
-        #totalLux = luxSense.calculate_lux(fullLux, irLux)
-        fullLux = [luxSense.lux, luxSense.infrared, luxSense.visible, luxSense.full_spectrum]
-        
-        
-        specTriad.take_measurements()
-        specData = []
-        specData.append(specTriad.get_calibrated_A())
-        specData.append(specTriad.get_calibrated_B())
-        specData.append(specTriad.get_calibrated_C())
-        specData.append(specTriad.get_calibrated_D())
-        specData.append(specTriad.get_calibrated_E())
-        specData.append(specTriad.get_calibrated_F())
-        specData.append(specTriad.get_calibrated_G())
-        specData.append(specTriad.get_calibrated_H())
-        specData.append(specTriad.get_calibrated_R())        
-        specData.append(specTriad.get_calibrated_I())
-        specData.append(specTriad.get_calibrated_S())
-        specData.append(specTriad.get_calibrated_J())
-        specData.append(specTriad.get_calibrated_T())
-        specData.append(specTriad.get_calibrated_U())
-        specData.append(specTriad.get_calibrated_V())
-        specData.append(specTriad.get_calibrated_W())
-        specData.append(specTriad.get_calibrated_K())
-        specData.append(specTriad.get_calibrated_L())
-        
-        
-        '''debug
-        print("Probe Temp:")
-        print(tempList)
-        print("Ambient data (Temp, Temp, Pressure, Humidity):")
-        print(ambientData)
-        print("Soil moisture:")
-        print(soilMoist)
-        print("Luminosity:")
-        print(fullLux)
-        #print(fullLux, irLux, totalLux)
-        print("Spectral Data (ABCDEFGHRISJTUVWKL):")
-        print(specData) 
-        
-        #take_image()
-        time.sleep(1)
-
-        '''
-        #ahtTest = str(tempHum.print())
-        #ahtTemp = tempHum.temperature()
-        #ahtHum = tempHum.humidity()
-        #tempList = []
-        #tempBus.convert_temp()
-        #time.sleep_ms(800)
-        
-        #for i in temps:
-        #    tempList.append(tempBus.read_temp(i))
-        '''
-        #print(tempList)
-        #moist = analogMoist.read_u16() * 3.3 / 65536
-        #print(moist)
-        #print(ahtTest)
-        
-        
-        
-        #tempFile = open("image.jpeg",'r')
-        #imageData = tempFile.read()
-        #tempFile.close()
-        '''
-        '''
-        global theBytes
-        global the64Bytes
-        print(gc.mem_free())
-        gc.collect()
+        try:
+            scd40CO2.start_periodic_measurement()
+        except Exception as error:
+            print(error)
         time.sleep(1)
         
-        q = open("image.jpeg","rb")
-        theBytes = q.read()
-        q.close()
-        time.sleep(2)
-        #t = open("image.txt","wb")
-        #t.write(theBytes)
-        #t.close()
-        time.sleep(2)
-        #os.remove("image.jpeg")
-        time.sleep(2)
-        #del theBytes
-        gc.collect()
-        #print(gc.mem_free())
-        #gc.collect()
-        time.sleep(1)
-        print(gc.mem_free())
-        the64Bytes = ubinascii.b2a_base64(t.read())
-        time.sleep(1)
-        #t.close()
-        #del theBytes
-        gc.collect()
-        print(gc.mem_free())
-        the64String = the64Bytes.decode('utf-8')
+        try:
+            atmosphericData["BME280"]["TEMP"] = bmeAtmospheric.read_compensated_data()[0]
+            atmosphericData["BME280"]["PRESSURE"] = bmeAtmospheric.read_compensated_data()[1]
+            atmosphericData["BME280"]["HUMIDITY"] = bmeAtmospheric.read_compensated_data()[2]
+            atmosphericData["BME280"]["DEWPOINT"] = bmeAtmospheric.dew_point
+            #atmosphericData["BME280"]["dewpoint"] = 0
+            atmosphericData["BME280"]["ALTITUDE"] = bmeAtmospheric.altitude
+        except Exception as error:
+            print(error)
+            errorHandler("BME280 reading", error, traceback.print_stack())
+            atmosphericData["BME280"]["TEMP"] = 0
+            atmosphericData["BME280"]["PRESSURE"] = 0
+            atmosphericData["BME280"]["HUMIDITY"] = 0
+            atmosphericData["BME280"]["DEWPOINT"] = 0
+            #atmosphericData["BME280"]["dewpoint"] = 0
+            atmosphericData["BME280"]["ALTITUDE"] = 0
         
-        time.sleep(1)
-        del the64Bytes
-        gc.collect()
-        print(gc.mem_free())'''
+        co2Wait = 0
+        while not scd40CO2.data_ready:
+            print("waiting on CO2 sensor")
+            if co2Wait < 20:
+                co2Wait += 1
+                time.sleep_ms(500)
+            else:
+                errorHandler("SCD40 data ready", "timed out waiting for CO2 sensor", "") 
+                break
+            
         
-        gc.collect()
-        print("message construct mem:")
-        print(gc.mem_free())
-        '''
-        testMsg = {"node": secretVars.nodeID,
-                   "unitName": secretVars.unitName,
-                   "UID": unique_id(),
-                   "soilTemp": tempList,
-                   "soilMoist": soilMoist,
-                   "ambTemp1": ambientData[0],
-                   "ambTemp2": ambientData[1],
-                   "ambPres": ambientData[2],
-                   "ambHum": ambientData[3],
-                   "dewPoint": ambientData[4], 
-                   "lux": fullLux,
-                   "spectral": specData,
-                   "imageData": the64String,
-                   "softwareVersion": 8.1
-                   }
-        '''
+        try:
+            atmosphericData["SCD40"]["TEMP"] = scd40CO2.temperature
+            atmosphericData["SCD40"]["HUMIDITY"] = scd40CO2.relative_humidity
+            atmosphericData["SCD40"]["CO2"] = scd40CO2.co2
+        except Exception as error:
+            errorHandler("SCD40 reading", error, traceback.print_stack())
+            atmosphericData["SCD40"]["TEMP"] = 0
+            atmosphericData["SCD40"]["HUMIDITY"] = 0
+            atmosphericData["SCD40"]["CO2"] = 0
         
-        testMsg = {"node": secretVars.nodeID,
-                   "unitName": secretVars.unitName,
-                   "UID": unique_id(),
-                   "soilTemp": tempList,
-                   "soilMoist": soilMoist,
-                   "ambTemp1": ambientData[0],
-                   "ambTemp2": ambientData[1],
-                   "ambPres": ambientData[2],
-                   "ambHum": ambientData[3],
-                   "dewPoint": ambientData[4], 
-                   "lux": fullLux,
-                   "spectral": specData,
-                   "softwareVersion": 8.1
-                   }
-        #print(json.dumps(testMsg).encode())
-        client.publish(secretVars.telemTopic, json.dumps(testMsg).encode())
-        
-        del testMsg
-        del tempList
-        del soilMoist
-        del ambientData
-        del fullLux
-        del specData
-        gc.collect()
-        '''
-        take_image()
-        time.sleep(3)
-        #global theBytes
-        #global the64Bytes
-        print("first mem:")
-        print(gc.mem_free())
-        gc.collect()
-        time.sleep(1)
-        
-        q = open("image.jpeg","rb")
-        theBytes = q.read()
-        q.close()
-        time.sleep(2)
-        print("second mem:")
-        print(gc.mem_free())
-        
-        #t = open("image.txt","wb")
-        #t.write(theBytes)
-        #t.close()
-        #time.sleep(2)
-        #os.remove("image.jpeg")
-        time.sleep(2)
-        #del theBytes
-        gc.collect()
-        print("third mem")
-        print(gc.mem_free())
-        #gc.collect()
-        time.sleep(1)
-        print(gc.mem_free())
-        the64Bytes = ubinascii.b2a_base64(theBytes)
-        time.sleep(1)
-        #t.close()
-        del theBytes
-        gc.collect()
-        print("clear bytes:")
-        print(gc.mem_free())
-        the64String = the64Bytes.decode('utf-8')
-        
-        time.sleep(1)
-        del the64Bytes
-        gc.collect()
-        print("clear 64 bytes:")
-        print(gc.mem_free())
-        
-        testMsg2 = {"node": secretVars.nodeID,
-                    "unitName": secretVars.unitName,
-                    "imageData": the64String
-                    }
-        
-        client.publish(secretVars.telemTopic, json.dumps(testMsg2).encode())
-        '''
-        #collect garbage and close files
-        
-        time.sleep(logTime)
-        
-        client.check_msg()
-        global lastUpdateCheck
-        timeDiff = time.time() - lastUpdateCheck
-        
-        if timeDiff > 86400:
-            #global lastUpdateCheck
-            #lastUpdateCheck = time.time()
-            #otaClient.download_and_install_update_if_available()
-            print(time.time() - lastUpdateCheck)
-            time.sleep(2)
-            lastUpdateCheck = time.time()
-            time.sleep(2)
-            #otaClient.download_and_install_update_if_available()
-            s = open("updateFlag.txt","w")
-            s.write("1")
-            s.close()
-            machine.reset()
+        #Log light data:
+        if totalLuxPresent == True:
+            try:
+                luxData["TOTAL"] = totalLuxSense.lux
+                luxData["IR"] = totalLuxSense.infrared
+                luxData["VIS"] = totalLuxSense.visible
+                luxData["FULLSPEC"] = totalLuxSense.full_spectrum
+            except Exeption as error:
+                errorHandler("lux reading", error, traceback.print_stack())
         else:
             pass
-
-main()
- 
+        
+        #luxData = [totalLuxSense.lux, totalLuxSense.infrared, totalLuxSense.visible, totalLuxSense.full_spectrum]
+        global specTriadPresent
+        if specTriadPresent:
+            try:
+                specTriad.take_measurements()
+                
+                lightSpectrumData["IR"]["R"] = specTriad.get_calibrated_R()
+                lightSpectrumData["IR"]["S"] = specTriad.get_calibrated_S()
+                lightSpectrumData["IR"]["T"] = specTriad.get_calibrated_T()
+                lightSpectrumData["IR"]["U"] = specTriad.get_calibrated_U()
+                lightSpectrumData["IR"]["V"] = specTriad.get_calibrated_V()
+                lightSpectrumData["IR"]["W"] = specTriad.get_calibrated_W()
+                
+                lightSpectrumData["VIS"]["G"] = specTriad.get_calibrated_G()
+                lightSpectrumData["VIS"]["H"] = specTriad.get_calibrated_H()
+                lightSpectrumData["VIS"]["I"] = specTriad.get_calibrated_I()
+                lightSpectrumData["VIS"]["J"] = specTriad.get_calibrated_J()
+                lightSpectrumData["VIS"]["K"] = specTriad.get_calibrated_K()
+                lightSpectrumData["VIS"]["L"] = specTriad.get_calibrated_L()
+                
+                lightSpectrumData["UV"]["A"] = specTriad.get_calibrated_A()
+                lightSpectrumData["UV"]["B"] = specTriad.get_calibrated_B()
+                lightSpectrumData["UV"]["C"] = specTriad.get_calibrated_C()
+                lightSpectrumData["UV"]["D"] = specTriad.get_calibrated_D()
+                lightSpectrumData["UV"]["E"] = specTriad.get_calibrated_E()
+                lightSpectrumData["UV"]["F"] = specTriad.get_calibrated_F()
+                
+            except Exception as error:
+                errorHandler("spectrum reading", error, traceback.print_stack())
+            
+        else:
+            pass
+        
+        
+        #Sensor probe readings:
+        try:
+            tempProbeBus.convert_temp()
+            time.sleep_ms(800)
+            for i in probeTemps:
+                tempProbeValues.append(tempProbeBus.read_temp(i))
+                
+            for pin in moistProbePins:
+                moistProbeValues.append(pin.read_u16())
+            
+            probeData = {}
+            for index, temp in enumerate(tempProbeValues):
+                probeData[index] = {"TEMP":temp, "MOIST":moistProbeValues[index]}
+        except Exception as error:
+            print(error)
+            errorHandler("probe reading", error, traceback.print_stack())
+            probeData = {"TEMP":0.0,"MOIST":0.0}
+        #Battery voltage readings:
+        #TODO: choose an analog pin and set up appropriate voltage divider, maybe MCP chip
+        #TODO: custom exceptions/types
+        #TODO: exception logging, data storage in flash while offline, wifi detect/reconnect
+       
+        #build the json payload:
+        mqttPayload = {
+                        "node": config["NAME"],
+                        "UID": UID,
+                        "CONTEXT": config["CONTEXT"],
+                        "LIGHTSPECTRUM": lightSpectrumData,
+                        "LUX": luxData,
+                        "ATMOSPHERIC": atmosphericData,
+                        "PROBE": probeData,
+                        #"TIME": rtClock.datetime()
+                       }
+        
+        mqttPayload = json.dumps(mqttPayload)
+        print(mqttPayload)
+        if not station.isconnected():
+            if offlineMode:
+                with open("offlineData.txt",'a') as f:
+                    f.write("\n")
+                    json.dumps(mqttPayload, f)
+                    #add enclosing square brackets to make json array and comma between each json, but not after last
+                config["SAVEDDATA"] = True
+                with open("config.json",'w') as f:
+                    json.dump(config, f)
+            else:
+                try:
+                    station.connect(config["SSID"], config["WIPASS"])
+                    wifiAttempts = 0
+                    while not station.isconnected():
+                        if wifiAttempts < 10:
+                            wifiAttempts += 1
+                            time.sleep(3)
+                            station.connect(config["SSID"], config["WIPASS"])
+                        else:
+                            if wifiAttempts >= 10 and time.mktime(rtClock.datetime()) - lastConnect > 600:
+                                #config["SAVEDDATA"] = True
+                                offlineMode = True
+                            #TODO: enter longer log interval mode and save data locally
+                except Exception as error:
+                    errorHandler("wifi recconnect", error, traceback.print_stack())
+        else:
+        
+            try:
+                client.publish(telemTopic, mqttPayload.encode())
+                client.check_msg()
+            except Exception as error:
+                errorHandler("mqtt publish", error, traceback.print_stack())
+                try:
+                    client.connect()
+                    client.publish(telemTopic, mqttPayload.encode())
+                    '''
+                    if config["SAVEDDATA"]:
+                        pass
+                        #for line in file, publish each, change flag, delete saved
+                    '''
+                    #client.check_msg()
+                except Exception as error:
+                    errorHandler("mqtt reconnect", error, traceback.print_stack())
+                    pass
+                       
+                try:
+                    client.check_msg()
+                except Exception as error:
+                    errorHandler("mqtt message check", error, traceback.print_stack())
+        #TODO: if time.mktime(rtClock.datetime) - lastUpdateCheck > 1 day, run updater
+        #time.sleep(10)
+                    
+        if station.isconnected() and config["SAVEDDATA"]:
+            try:
+                with open("offlineData.txt",'r') as f:
+                    for payload in f.readlines():
+                        if payload == "\n":
+                            pass
+                        else:
+                            client.publish(telemTopic,json.dumps(payload).encode())
+                            time.sleep(2)           
+                
+            except Exception as error:
+                errorHandler("offline data publish", error, traceback.print_stack())
+                #iterate through jsons in file and publish
+            else:
+                config["SAVEDDATA"] = False
+                try:
+                    os.remove("offlineData.txt")
+                except:
+                    pass
+                           
+        if offlineMode:
+            time.sleep(config["OFFLINELOGINTERVAL"])
+        else:
+            time.sleep(config["LOGINTERVAL"])
+                        
+main()                        
 
