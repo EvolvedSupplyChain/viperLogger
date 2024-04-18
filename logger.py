@@ -5,6 +5,8 @@ A. Liebig for ESC
 4/13/24
 '''
 
+#update test flag
+
 import time
 import json
 import onewire
@@ -159,8 +161,8 @@ else:
 #Instantiate MQTT client and define callbacks:
 def sub_cb(topic, msg):
   print((topic, msg))
-  if topic == ccTopic:
-    decodedMsg = json.loads(msg)
+  if topic.decode() == ccTopic:
+    decodedMsg = json.loads(msg.decode())
     subject = decodedMsg.get("subject")
     #print('Topic: ' + topic + 'Message: ' + msg)
     if subject == "returnSettings":
