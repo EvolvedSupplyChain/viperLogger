@@ -159,8 +159,9 @@ else:
 #Instantiate MQTT client and define callbacks:
 def sub_cb(topic, msg):
   print((topic, msg))
-  if topic == ccTopic:
-    decodedMsg = json.loads(msg)
+  if topic.decode() == ccTopic:
+    decodedMsg = json.loads(msg.decode())
+    print(decodedMsg)
     subject = decodedMsg.get("subject")
     #print('Topic: ' + topic + 'Message: ' + msg)
     if subject == "returnSettings":
@@ -568,3 +569,4 @@ def main():
             time.sleep(config["LOGINTERVAL"])
                         
 main()                        
+
