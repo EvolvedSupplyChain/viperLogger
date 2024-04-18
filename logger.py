@@ -51,8 +51,8 @@ try:
     station.active(True)
     station.connect(config["SSID"], config["WIPASS"])
 except Exception as error:
-    errorHandler("wifi setup", error, traceback.print_stack())
-
+    #errorHandler("wifi setup", error, traceback.print_stack())
+    print("wifi error")
 time.sleep(1)
 
 firstConAttempts = 0
@@ -92,6 +92,7 @@ def errorHandler(source, message, trace):
                         "Message": message,
                         "Trace": trace
                       }
+        print(logPayload)
         client.publish(logTopic, json.dump(logPayload).encode())
     except:
         pass
@@ -186,7 +187,7 @@ def sub_cb(topic, msg):
                 json.dump(config, f)
             ugit.pull_all(isconnected = True)
             
-        except Exceptoin as error:
+        except Exception as error:
             errorHandler("updater pull all", error, traceback.print_stack())
             
     elif subject == "forceFileUpdate":
@@ -241,8 +242,8 @@ except Exception as error:
 #total luminosity sensor:
 try:
     totalLuxSense = TSL2591.TSL2591(sensorBus)
-    #totalLuxSense.gain = TSL2591.GAIN_LOW
-    totalLuxSense.gain = config["SENSORPREF"]["TSL2591"]["GAIN"]
+    totalLuxSense.gain = TSL2591.GAIN_LOW
+    #totalLuxSense.gain = config["SENSORPREF"][1]["GAIN"]
     totalLuxPresent = True
 except Exception as error:
     print(error)
@@ -282,6 +283,7 @@ time.sleep(1)
 try:
     scd40CO2 = scd40.SCD4X(sensorBus)
 except:
+    print("co2 error")
     pass
 
 time.sleep(1)
@@ -483,7 +485,7 @@ def main():
                         "LUX": luxData,
                         "ATMOSPHERIC": atmosphericData,
                         "PROBE": probeData,
-                        "TIME": rtClock.datetime()
+                        #"TIME": rtClock.datetime()
                        }
         
         mqttPayload = json.dumps(mqttPayload)
@@ -555,7 +557,10 @@ def main():
                 #iterate through jsons in file and publish
             else:
                 config["SAVEDDATA"] = False
-                os.remove("offlineData.txt")
+                try:
+                    os.remove("offlineData.txt")
+                except:
+                    pass
                            
         if offlineMode:
             time.sleep(config["OFFLINELOGINTERVAL"])
