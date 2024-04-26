@@ -110,8 +110,7 @@ def errorHandler(source, message, trace):
 def statusHandler(source, message):
     statusPayload = {
                         "Source": source,
-                        "Message": message,
-                        "Time": str(rtClock.datetime())
+                        "Message": message
                     }
     try:
         client.publish(statusTopic, json.dumps(statusPayload).encode())
