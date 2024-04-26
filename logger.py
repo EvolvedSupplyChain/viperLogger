@@ -44,6 +44,8 @@ statusTopic = config["STATUSTOPIC"].format(config["TENANT"],UID.decode())
 
 print(telemTopic)
 
+client = MQTTClient(ubinascii.hexlify(machine.unique_id()), config["BROKER"], keepalive=60)
+
 
 #connect to wifi:
 try:
@@ -73,8 +75,12 @@ while station.isconnected() == False:
         print("can't make wifi connection, going to offline mode")
         offlineMode = True
         break
-        
-print(station.ifconfig())
+
+try:
+    print(station.ifconfig())
+except Exception as error:
+    #errorHandler("IP error", error, traceback.print_stack())
+    print(error)
 
 #statusHandler("wifi connection", "connected successfully")
 
@@ -93,26 +99,28 @@ def errorHandler(source, message, trace):
                         "Trace": trace
                       }
         print(logPayload)
-        client.publish(logTopic, json.dump(logPayload).encode())
+        client.publish(logTopic, json.dumps(logPayload).encode())
     except:
-        pass
+        with open("errorlog.txt",'a') as f:
+            f.write("\nCould not report error over MQTT at: " + str(rtClock.datetime()))
 
 #log status events:
 def statusHandler(source, message):
     statusPayload = {
                         "Source": source,
                         "Message": message,
-                        "Time": rtClock.datetime()
+                        "Time": str(rtClock.datetime())
                     }
     try:
-        client.publish(statusTopic, json.dump(statusPayload).encode())
+        client.publish(statusTopic, json.dumps(statusPayload).encode())
     except Exception as error:
+        print(error)
         errorHandler("status message publish", error, traceback.print_stack())
         #TODO: do something here, maybe just an additional note in local log
 
 
 #test the internet connection:
-boxIP = station.ifconfig()
+#boxIP = station.ifconfig()
 wifiConnected = True
 
 
@@ -131,6 +139,9 @@ def set_time():
         s.settimeout(1)
         res = s.sendto(NTP_QUERY, addr)
         msg = s.recv(48)
+    except Exception as error:
+        errorHandler("NTP error", error, traceback.print_stack())
+        print("NTP error")
     finally:
         s.close()
 
@@ -145,6 +156,8 @@ try:
 except Exception as error:
     print(error)
     errorHandler("set rt clock", error, traceback.print_stack())
+#else:
+#    statusHandler("wifi setup", "initial wifi connection successful")
 
 
 if config["LASTUPDATECHECK"] == 0: #or config["LASTUPDATECHECK"]
@@ -185,7 +198,7 @@ def sub_cb(topic, msg):
         #TODO: if sent parameter(s) in config/config.json, validate value and save
         print("settings change requested")
         pass
-    elif sunject == "revertSettings":
+    elif subject == "revertSettings":
         try:
             if "configBak.json" in os.listdir():
                 os.remove("config.json")
@@ -210,7 +223,8 @@ def sub_cb(topic, msg):
             
         except Exception as error:
             errorHandler("updater pull all", error, traceback.print_stack())
-            
+    elif subject == "forceReboot":
+        machine.reset()
     elif subject == "forceFileUpdate":
         print("manually update file: " + msg)
         try:
@@ -222,8 +236,16 @@ def sub_cb(topic, msg):
   else:
     print('message recieved: ' + msg)
     
-    
-disconMsg = "Client " + str(UID) + " has disconnected unexpectedly at " + str(rtClock.datetime())
+disconMsg = {
+             "Source": "Last Will",
+             "Message": "Client " + str(UID) + " has disconnected unexpectedly"
+            }
+'''    
+try:    
+    disconMsg = "Client " + str(UID) + " has disconnected unexpectedly at " + str(rtClock.datetime())
+except Exception as error:
+    errorHandler("discon message", error, traceback.print_stack())
+'''
 '''
 #set lw&t to notify of disconnect:
 disconMsg = "Client " + UID + " has disconnected unexpectedly at " + rtClock.datetime()
@@ -240,9 +262,10 @@ def connect_and_subscribe():
 
 client = connect_and_subscribe()
 '''
-client = MQTTClient(ubinascii.hexlify(machine.unique_id()), config["BROKER"], keepalive=60)
+#client = MQTTClient(ubinascii.hexlify(machine.unique_id()), config["BROKER"], keepalive=60)
+#move client instantiation up to avoid errors
 client.set_callback(sub_cb)
-client.set_last_will(statusTopic,disconMsg)
+client.set_last_will(statusTopic,json.dumps(disconMsg).encode())
 
 try:
     client.connect()
@@ -250,7 +273,9 @@ except Exception as error:
     print(error)
     errorHandler("mqtt connect", error, traceback.print_stack())
 else:
+    time.sleep(1)
     client.subscribe(ccTopic)
+    statusHandler("inital connect", "connected to wifi and mqtt")
 #TODO: mqtt connection checking and error catching, SSL/TLS, mqtt last will
 
 #declare I2C and SPI busses for sensors:
@@ -265,11 +290,13 @@ try:
     totalLuxSense = TSL2591.TSL2591(sensorBus)
     totalLuxSense.gain = TSL2591.GAIN_LOW
     #totalLuxSense.gain = config["SENSORPREF"][1]["GAIN"]
-    totalLuxPresent = True
+    #totalLuxPresent = True
 except Exception as error:
     print(error)
     errorHandler("lux sensor init", error, traceback.print_stack)
     totalLuxPresent = False
+else:
+    totalLuxPresent = True
 #TODO: add totalLuxSense.gain = config["SENSORPREF"]["TSL2591"]["GAIN"]
 
 #spectral triad light sensor:
@@ -305,7 +332,7 @@ try:
     scd40CO2 = scd40.SCD4X(sensorBus)
 except:
     print("co2 error")
-    pass
+    errorHandler("CO2 instantiate", error, traceback.print_stack())
 
 time.sleep(1)
 try:
@@ -384,12 +411,14 @@ def main():
                            }
         
         #Log atmospheric conditions:
-        
+        '''
         try:
             scd40CO2.start_periodic_measurement()
         except Exception as error:
+            errorHandler("CO2 meas begin", error, traceback.print_stack())
             print(error)
         time.sleep(1)
+        '''
         
         try:
             atmosphericData["BME280"]["TEMP"] = bmeAtmospheric.read_compensated_data()[0]
@@ -398,6 +427,7 @@ def main():
             atmosphericData["BME280"]["DEWPOINT"] = bmeAtmospheric.dew_point
             #atmosphericData["BME280"]["dewpoint"] = 0
             atmosphericData["BME280"]["ALTITUDE"] = bmeAtmospheric.altitude
+            
         except Exception as error:
             print(error)
             errorHandler("BME280 reading", error, traceback.print_stack())
@@ -418,7 +448,6 @@ def main():
                 errorHandler("SCD40 data ready", "timed out waiting for CO2 sensor", "") 
                 break
             
-        
         try:
             atmosphericData["SCD40"]["TEMP"] = scd40CO2.temperature
             atmosphericData["SCD40"]["HUMIDITY"] = scd40CO2.relative_humidity
@@ -473,8 +502,7 @@ def main():
             
         else:
             pass
-        
-        
+
         #Sensor probe readings:
         try:
             tempProbeBus.convert_temp()
@@ -488,6 +516,7 @@ def main():
             probeData = {}
             for index, temp in enumerate(tempProbeValues):
                 probeData[index] = {"TEMP":temp, "MOIST":moistProbeValues[index]}
+                
         except Exception as error:
             print(error)
             errorHandler("probe reading", error, traceback.print_stack())
@@ -505,7 +534,7 @@ def main():
                         "LIGHTSPECTRUM": lightSpectrumData,
                         "LUX": luxData,
                         "ATMOSPHERIC": atmosphericData,
-                        "PROBE": probeData,
+                        "PROBE": probeData
                         #"TIME": rtClock.datetime()
                        }
         
@@ -536,6 +565,12 @@ def main():
                             #TODO: enter longer log interval mode and save data locally
                 except Exception as error:
                     errorHandler("wifi recconnect", error, traceback.print_stack())
+                else:
+                    if station.isconnected():
+                        try:
+                            statusHandler("wifi recconect","wifi connection successfully restablished")
+                        except:
+                            pass
         else:
         
             try:
@@ -546,6 +581,7 @@ def main():
                 try:
                     client.connect()
                     client.publish(telemTopic, mqttPayload.encode())
+                    client.subscribe(ccTopic)
                     '''
                     if config["SAVEDDATA"]:
                         pass
@@ -554,8 +590,9 @@ def main():
                     #client.check_msg()
                 except Exception as error:
                     errorHandler("mqtt reconnect", error, traceback.print_stack())
-                    pass
-                       
+                    #pass
+                else:
+                    offlineMode = False
                 try:
                     client.check_msg()
                 except Exception as error:
@@ -589,3 +626,4 @@ def main():
             time.sleep(config["LOGINTERVAL"])
                         
 main()                        
+
