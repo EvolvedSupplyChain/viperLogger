@@ -2,7 +2,8 @@
 ESC Viper Main Logging Loop
 logger.py
 A. Liebig for ESC
-4/13/24
+4/26/24
+Version 1.3
 '''
 
 import time
