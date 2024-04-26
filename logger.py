@@ -4,7 +4,7 @@ logger.py
 A. Liebig for ESC
 4/13/24
 '''
-#update flag 4/26
+
 import time
 import json
 import onewire
@@ -21,6 +21,7 @@ import gc
 import struct
 import bme280 #Atmospheric Sensor
 import traceback
+import os
 from umqttsimple import MQTTClient
 
 #TODO: power optimizations
@@ -565,12 +566,15 @@ def main():
                             #TODO: enter longer log interval mode and save data locally
                 except Exception as error:
                     errorHandler("wifi recconnect", error, traceback.print_stack())
-                else:
+                finally:
                     if station.isconnected():
+                        offlineMode = False
                         try:
                             statusHandler("wifi recconect","wifi connection successfully restablished")
                         except:
                             pass
+                    else:
+                        pass
         else:
         
             try:
@@ -602,19 +606,26 @@ def main():
                     
         if station.isconnected() and config["SAVEDDATA"]:
             try:
-                with open("offlineData.txt",'r') as f:
-                    for payload in f.readlines():
-                        if payload == "\n":
-                            pass
-                        else:
-                            client.publish(telemTopic,json.dumps(payload).encode())
-                            time.sleep(2)           
+                if "offlineData.txt" in os.listdir():
+                    with open("offlineData.txt",'r') as f:
+                        for payload in f.readlines():
+                            if payload == "\n":
+                                pass
+                            else:
+                                client.publish(telemTopic,json.dumps(payload).encode())
+                                time.sleep(2)
+                else:
+                    config["SAVEDDATA"] = False
+                    with open("config.json",'w') as f:
+                        json.dump(config,f)
                 
             except Exception as error:
                 errorHandler("offline data publish", error, traceback.print_stack())
                 #iterate through jsons in file and publish
             else:
                 config["SAVEDDATA"] = False
+                with open("config.json",'w') as f:
+                    json.dump(config,f)
                 try:
                     os.remove("offlineData.txt")
                 except:
