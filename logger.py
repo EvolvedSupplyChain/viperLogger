@@ -249,7 +249,7 @@ except Exception as error:
 '''
 '''
 #set lw&t to notify of disconnect:
-disconMsg = "Client " + UID + " has disconnected unexpectedly at " + rtClock.datetime()
+#disconMsg = "Client " + UID + " has disconnected unexpectedly at " + rtClock.datetime()
 client.set_last_will(config["TELEMTOPIC"],disconMsg)
 
 def connect_and_subscribe():
