@@ -101,7 +101,7 @@ def errorHandler(source, message, trace):
                         "Source": source,
                         "Message": message,
                         "Trace": trace,
-                        "Mem": str(mem)
+                        "Mem": mem
                       }
         print(logPayload)
         client.publish(logTopic, json.dumps(logPayload).encode())
@@ -117,7 +117,7 @@ def statusHandler(source, message):
                         "Source": source,
                         "Message": message,
                         "Time": str(rtClock.datetime()),
-                        "Mem": str(mem)
+                        "Mem": mem
                     }
     try:
         client.publish(statusTopic, json.dumps(statusPayload).encode())
@@ -173,6 +173,8 @@ else:
 #Instantiate MQTT client and define callbacks:
 def sub_cb(topic, msg):
   global config
+  global fanEnabled
+  global fanOverride
   print((topic, msg))
   if topic.decode() == ccTopic:
     decodedMsg = json.loads(msg.decode())
@@ -190,17 +192,33 @@ def sub_cb(topic, msg):
 
     elif subject == "changeSetting":
         try:
-            if decodedMessage["SETTING"] in locals():
-                if isinstance(decodedMessage["VALUE"],type(locals()[decodedMessage["SETTING"]])):
-                    locals()[decodedMessage["SETTING"]] = decodedMessage["VALUE"]
+            if decodedMsg["SETTING"] in locals():
+                if isinstance(decodedMsg["VALUE"],type(locals()[decodedMsg["SETTING"]])):
+                    locals()[decodedMsg["SETTING"]] = decodedMsg["VALUE"]
+                    print(str(decodedMsg["SETTING"]) + " changed to " + str(decodedMsg["VALUE"]))
+                    try:
+                        statusHandler("remote command", str(decodedMsg["SETTING"]) + " changed to " + str(decodedMsg["VALUE"]))
+                    except:
+                        pass
                 else:
                     pass
                     #raise exception for no such setting/invalid value
-            elif decodedMessage["SETTING"] in config.keys():
+            elif decodedMsg["SETTING"] in globals():
+                if isinstance(decodedMsg["VALUE"],type(globals()[decodedMsg["SETTING"]])):
+                    globals()[decodedMsg["SETTING"]] = decodedMsg["VALUE"]
+                    print(str(decodedMsg["SETTING"]) + " changed to " + str(decodedMsg["VALUE"]))
+                    try:
+                        statusHandler("remote command", str(decodedMsg["SETTING"]) + " changed to " + str(decodedMsg["VALUE"]))
+                    except:
+                        pass
+                else:
+                    pass
+                    #raise exception for no such setting/invalid value
+            elif decodedMsg["SETTING"] in config.keys():
                 with open("configBak.json",'w') as f:
                     json.dump(config,f)
-                if isinstance(decodedMessage["VALUE"], type(config[decodedMessage["SETTING"]])):
-                    config[decodedMessage["SETTING"]] = decodedMessage["VALUE"]
+                if isinstance(decodedMsg["VALUE"], type(config[decodedMsg["SETTING"]])):
+                    config[decodedMsg["SETTING"]] = decodedMsg["VALUE"]
                     with open("config.json",'w') as f:
                         json.dump(config,f)
                 else:
@@ -210,7 +228,8 @@ def sub_cb(topic, msg):
                 #raise exception for setting not found
                 pass    
         except Exception as error:
-            print("parsing error")
+            print("parsing error: ")
+            print(error)
     elif subject == "revertSettings":
         try:
             if "configBak.json" in os.listdir():
@@ -347,7 +366,7 @@ time.sleep(1)
 #SDC40 CO2 Sensor:
 try:
     scd40CO2 = scd40.SCD4X(sensorBus)
-except:
+except Exception as error:
     print("co2 error")
     errorHandler("CO2 instantiate", error, traceback.print_stack())
 
@@ -414,6 +433,8 @@ def fanControl(ambient, time):
 
 #Main logging loop:
 def main():
+    global fanEnabled
+    global fanOverride
     global config
     global offlineMode
     while True:
