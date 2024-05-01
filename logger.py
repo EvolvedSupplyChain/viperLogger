@@ -1,9 +1,11 @@
 '''
-ESC Viper Main Logging Loop
 logger.py
+Main Logging Loop
+ESC Viper Logging Suite
+REQUIRED
 A. Liebig for ESC
-4/26/24
-Version 1.3
+5/1/24
+Version 1.5
 '''
 
 import time
@@ -23,18 +25,17 @@ import struct
 import bme280 #Atmospheric Sensor
 import traceback
 import os
+#import webrepl
 from umqttsimple import MQTTClient
-
-#TODO: power optimizations
-
-#global flag varaibles for non persistent system states:
-#wifiConnected = False
-#validIP = False
-#mqttConnected = False
 
 #load the configuration:
 with open("config.json",'r') as f:
     config = json.load(f)
+
+#TODO: remember to machine.reset after log interval change because otherwise watchdog timing will be wrong
+#start the watchdog:
+#memDog = machine.WDT(id=0, timeout=config["LOGINTERVAL"] * 5 * 1000)
+#memDog.feed()
 
 offlineMode = False
 UID = ubinascii.hexlify(machine.unique_id())
@@ -95,23 +96,28 @@ def errorHandler(source, message, trace):
         f.write("\n\tSource: " + source + "\n\tMessage: " + str(message) + "\n\tTrace: " + str(trace) + "\n")
         
     try:
+        mem = gc.mem_free()
         logPayload = {
                         "Source": source,
                         "Message": message,
-                        "Trace": trace
+                        "Trace": trace,
+                        "Mem": str(mem)
                       }
         print(logPayload)
         client.publish(logTopic, json.dumps(logPayload).encode())
     except:
-        with open("errorlog.txt",'a') as f:
-            f.write("\nCould not report error over MQTT at: " + str(rtClock.datetime()))
+        print("error writing file, this is for debug")
+        #with open("errorlog.txt",'a') as f:
+            #f.write("\nCould not report error over MQTT at: " + str(rtClock.datetime()))
 
 #log status events:
 def statusHandler(source, message):
+    mem = gc.mem_free()
     statusPayload = {
                         "Source": source,
                         "Message": message,
-                        "Time": str(rtClock.datetime())
+                        "Time": str(rtClock.datetime()),
+                        "Mem": str(mem)
                     }
     try:
         client.publish(statusTopic, json.dumps(statusPayload).encode())
@@ -119,11 +125,6 @@ def statusHandler(source, message):
         print(error)
         errorHandler("status message publish", error, traceback.print_stack())
         #TODO: do something here, maybe just an additional note in local log
-
-
-#test the internet connection:
-#boxIP = station.ifconfig()
-wifiConnected = True
 
 
 #setup the RTC
@@ -158,8 +159,8 @@ try:
 except Exception as error:
     print(error)
     errorHandler("set rt clock", error, traceback.print_stack())
-#else:
-#    statusHandler("wifi setup", "initial wifi connection successful")
+else:
+    statusHandler("wifi setup", "initial wifi connection successful")
 
 
 if config["LASTUPDATECHECK"] == 0: #or config["LASTUPDATECHECK"]
@@ -168,8 +169,6 @@ else:
     pass
 
 #lastUpdateCheck = config["LASTUPDATECHECK"]
-
-#setup the auto updater:
 
 #Instantiate MQTT client and define callbacks:
 def sub_cb(topic, msg):
@@ -188,18 +187,30 @@ def sub_cb(topic, msg):
         '''
         print("send the config")
         client.publish(ccTopic, json.dumps(config).encode())
-    elif subject == "changeSettings":
-        #change device settings
-        with open("configBak.json",'w') as f:
-            json.dump(config,f)
-            
-        config = decodedMsg
-        with open("config.json",'w') as f:
-            json.dump(config,f)
-        
-        #TODO: if sent parameter(s) in config/config.json, validate value and save
-        print("settings change requested")
-        pass
+
+    elif subject == "changeSetting":
+        try:
+            if decodedMessage["SETTING"] in locals():
+                if isinstance(decodedMessage["VALUE"],type(locals()[decodedMessage["SETTING"]])):
+                    locals()[decodedMessage["SETTING"]] = decodedMessage["VALUE"]
+                else:
+                    pass
+                    #raise exception for no such setting/invalid value
+            elif decodedMessage["SETTING"] in config.keys():
+                with open("configBak.json",'w') as f:
+                    json.dump(config,f)
+                if isinstance(decodedMessage["VALUE"], type(config[decodedMessage["SETTING"]])):
+                    config[decodedMessage["SETTING"]] = decodedMessage["VALUE"]
+                    with open("config.json",'w') as f:
+                        json.dump(config,f)
+                else:
+                    pass
+                    #raise exception about data type
+            else:
+                #raise exception for setting not found
+                pass    
+        except Exception as error:
+            print("parsing error")
     elif subject == "revertSettings":
         try:
             if "configBak.json" in os.listdir():
@@ -218,9 +229,12 @@ def sub_cb(topic, msg):
         try:
             print("call the updater")
             import ugit
-            config["LASTUPDATECHECK"] = time.mktime(rtClock.datetime())
-            with open("config.json", 'w') as f:
-                json.dump(config, f)
+            try:
+                config["LASTUPDATECHECK"] = time.mktime(rtClock.datetime())
+                with open("config.json", 'w') as f:
+                    json.dump(config, f)
+            except Exception as error:
+                print(error)
             ugit.pull_all(isconnected = True)
             
         except Exception as error:
@@ -235,8 +249,8 @@ def sub_cb(topic, msg):
         except Exception as error:
             errorHandler("manual file update", error, traceback.print_stack())
         
-  else:
-    print('message recieved: ' + msg)
+    else:
+        print('message recieved: ' + msg)
     
 disconMsg = {
              "Source": "Last Will",
@@ -278,6 +292,7 @@ else:
     time.sleep(1)
     client.subscribe(ccTopic)
     statusHandler("inital connect", "connected to wifi and mqtt")
+    #webrepl.start()
 #TODO: mqtt connection checking and error catching, SSL/TLS, mqtt last will
 
 #declare I2C and SPI busses for sensors:
@@ -355,8 +370,46 @@ except Exception as error:
     errorHandler("temp probe init", error, traceback.print_stack())
 
 #Analog Moisture Probe Sensors:
-moistProbePins = [machine.ADC(9)]
+#TODO: THESE PINS ARE ALL WRONG.  PLACEHOLDER
+#TODO: publish voltage info regularly, status channel
+moistProbePins = [machine.ADC(2),machine.ADC(3),machine.ADC(7)]
 #TODO: moisture probe power pin, switch off when not in use.
+solarPin = machine.ADC(4)
+battPin = machine.ADC(5)
+usbPin = machine.ADC(6)
+
+#Set up the vent fan:
+fanEnabled = False
+fanPin = machine.Pin(1, machine.Pin.OUT)  #THIS IS NOT 4
+fanPin.value(0)
+fanCyclesOn = 0
+fanCyclesOff = 0
+
+def fanControl(ambient, time):
+    if not fanEnabled:
+        if solarPin.read_uv() * 11 / 1000000 > 4.0 or usbPin.read_uv() * 11 / 1000000 > 4.0:
+            if sum(ambient) / 2 >= 25.0:
+                if fanCyclesOff > 5 or fanCyclesOff == 0:
+                    fanCyclesOff = 0
+                    fanEnabled = True
+                else:
+                    fanCyclesOff += 1
+                    fanEnabled = False
+            else:
+                fanEnabled = False
+        else:
+            if sum(ambient) / 2 >= 30:
+                fanEnabled = True
+    else:
+        if solarPin.read_uv() * 11 / 1000000 > 4.0 or usbPin.read_uv() * 11 / 1000000 > 4.0:
+            if sum(ambient) / 2 > 25:
+                fanEnabled = True
+            else:
+                pass
+        else:
+            pass
+    
+    return fanEnabled
 
 #Main logging loop:
 def main():
@@ -365,6 +418,14 @@ def main():
     while True:
         tempProbeValues = []
         moistProbeValues = []
+        powerData = {"BATT": False,
+                     "SOLAR": False,
+                     "USB": False,
+                     "BATTV": 0.0,
+                     "SOLARV": 0.0,
+                     "USBV": 0.0,
+                     "MAINV": 0.0}
+        
         luxData = {"TOTAL":0,
                    "IR":0,
                    "VIS":0,
@@ -513,7 +574,8 @@ def main():
                 tempProbeValues.append(tempProbeBus.read_temp(i))
                 
             for pin in moistProbePins:
-                moistProbeValues.append(pin.read_u16())
+                #moistProbeValues.append(pin.read_u16())
+                moistProbeValues.append(pin.read_uv() * 3.3 / 1000000)
             
             probeData = {}
             for index, temp in enumerate(tempProbeValues):
@@ -528,6 +590,18 @@ def main():
         #TODO: custom exceptions/types
         #TODO: exception logging, data storage in flash while offline, wifi detect/reconnect
        
+       
+        try:
+            powerData["BATTV"] = battPin.read_uv() / 1000000 * 11
+            powerData["MAINV"] = solarPin.read_uv() / 1000000 * 11
+            powerData["USBV"] = usbPin.read_uv() / 1000000 * 11
+            if battPin.read_uv() / 10000000 > 0:
+                powerData["BATT"] = True
+            else:
+                pass
+        except Exception as error:
+            print(error)
+            
         #build the json payload:
         mqttPayload = {
                         "node": config["NAME"],
@@ -536,8 +610,11 @@ def main():
                         "LIGHTSPECTRUM": lightSpectrumData,
                         "LUX": luxData,
                         "ATMOSPHERIC": atmosphericData,
-                        "PROBE": probeData
-                        #"TIME": rtClock.datetime()
+                        "PROBE": probeData,
+                        "POWER": powerData,
+                        "RTCLOCK": rtClock.datetime(),
+                        "MEM": gc.mem_free(),
+                        "FAN": fanEnabled
                        }
         
         mqttPayload = json.dumps(mqttPayload)
@@ -636,6 +713,27 @@ def main():
             time.sleep(config["OFFLINELOGINTERVAL"])
         else:
             time.sleep(config["LOGINTERVAL"])
+        
+        #TODO: power detection for fan control
+        #fanPin.value(fanCheck)
+        if atmosphericData["SCD40"]["TEMP"] >= 22:
+            fanPin.value(1)
+        else:
+            fanPin.value(0)
+        
+        print(gc.mem_free())
+        gc.collect()
+        print(gc.mem_free())
+        if gc.mem_free() * 1.5 < gc.mem_alloc():
+            print("low mem")
+            #memDog.feed()
+        else:
+            pass
+        
+        try:
+            statusHandler("logging loop", "all systems normal")
+        except:
+            pass
                         
 main()                        
 
