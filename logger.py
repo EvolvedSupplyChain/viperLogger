@@ -380,6 +380,7 @@ usbPin = machine.ADC(6)
 
 #Set up the vent fan:
 fanEnabled = False
+fanOverride = False
 fanPin = machine.Pin(1, machine.Pin.OUT)  #THIS IS NOT 4
 fanPin.value(0)
 fanCyclesOn = 0
@@ -716,11 +717,23 @@ def main():
         
         #TODO: power detection for fan control
         #fanPin.value(fanCheck)
+        '''    
         if atmosphericData["SCD40"]["TEMP"] >= 22:
+            fanEnabled = True
             fanPin.value(1)
         else:
             fanPin.value(0)
-        
+        '''    
+        if fanOverride == True:
+            pass
+        else:
+            if atmosphericData["SCD40"]["TEMP"] >= 22:
+                fanEnabled = True
+                fanPin.value(1)
+            else:
+                fanEnabled = False
+                fanPin.value(0)
+                
         print(gc.mem_free())
         gc.collect()
         print(gc.mem_free())
