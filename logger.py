@@ -623,6 +623,7 @@ def main():
             processed = []
             for index, reading in enumerate(readings):
                 readings[index] = usbPin.read_uv() / 1000000 * 11
+                time.sleep_ms(100)
                 
             for reading in readings:
                 if reading > statistics.stdev(readings):
