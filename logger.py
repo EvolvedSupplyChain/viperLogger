@@ -25,6 +25,7 @@ import struct
 import bme280 #Atmospheric Sensor
 import traceback
 import os
+import statistics
 #import webrepl
 from umqttsimple import MQTTClient
 
@@ -616,7 +617,19 @@ def main():
         try:
             powerData["BATTV"] = battPin.read_uv() / 1000000 * 11
             powerData["MAINV"] = solarPin.read_uv() / 1000000 * 11
-            powerData["USBV"] = usbPin.read_uv() / 1000000 * 11
+            #powerData["USBV"] = usbPin.read_uv() / 1000000 * 11
+            
+            readings = [0] * 10
+            processed = []
+            for index, reading in enumerate(readings):
+                readings[index] = usbPin.read_uv() / 1000000 * 11
+                
+            for reading in readings:
+                if reading > statistics.stdev(readings):
+                    processed.append(reading)
+                    
+            powerData["USBV"] = statistics.mean(processed)
+            
             if battPin.read_uv() / 10000000 > 0:
                 powerData["BATT"] = True
             else:
@@ -752,7 +765,7 @@ def main():
         if fanOverride == True:
             pass
         else:
-            if atmosphericData["SCD40"]["TEMP"] >= 22:
+            if atmosphericData["SCD40"]["TEMP"] >= 25:
                 fanEnabled = True
                 fanPin.value(1)
             else:
