@@ -4,8 +4,8 @@ Main Logging Loop
 ESC Viper Logging Suite
 REQUIRED
 A. Liebig for ESC
-5/1/24
-Version 1.5
+5/2/24
+Version 1.6
 '''
 
 import time
@@ -623,7 +623,10 @@ def main():
                 pass
         except Exception as error:
             print(error)
-            
+        
+       
+        #multisampling voltage read:
+        
         #build the json payload:
         mqttPayload = {
                         "node": config["NAME"],
@@ -635,7 +638,8 @@ def main():
                         "PROBE": probeData,
                         "POWER": powerData,
                         "RTCLOCK": rtClock.datetime(),
-                        "MEM": gc.mem_free(),
+                        "MEMFREE": gc.mem_free(),
+                        "MEMUSED": gc.mem_alloc(),
                         "FAN": fanEnabled
                        }
         
