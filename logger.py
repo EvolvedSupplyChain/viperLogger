@@ -392,11 +392,11 @@ except Exception as error:
 #Analog Moisture Probe Sensors:
 #TODO: THESE PINS ARE ALL WRONG.  PLACEHOLDER
 #TODO: publish voltage info regularly, status channel
-moistProbePins = [machine.ADC(2),machine.ADC(3),machine.ADC(7)]
+moistProbePins = [machine.ADC(2,atten=machine.ADC.ATTN_11DB),machine.ADC(3,atten=machine.ADC.ATTN_11DB),machine.ADC(7,atten=machine.ADC.ATTN_11DB)]
 #TODO: moisture probe power pin, switch off when not in use.
-solarPin = machine.ADC(4)
-battPin = machine.ADC(5)
-usbPin = machine.ADC(6)
+vBusPin = machine.ADC(4,atten=machine.ADC.ATTN_0DB)
+chargeOutPin = machine.ADC(5,atten=machine.ADC.ATTN_0DB)
+battPin = machine.ADC(6,atten=machine.ADC.ATTN_0DB)
 
 #Set up the vent fan:
 fanEnabled = False
@@ -408,7 +408,7 @@ fanCyclesOff = 0
 
 def fanControl(ambient, time):
     if not fanEnabled:
-        if solarPin.read_uv() * 11 / 1000000 > 4.0 or usbPin.read_uv() * 11 / 1000000 > 4.0:
+        if vBusPin.read_uv() * 11 / 1000000 > 4.0 or battPin.read_uv() * 11 / 1000000 > 4.0:
             if sum(ambient) / 2 >= 25.0:
                 if fanCyclesOff > 5 or fanCyclesOff == 0:
                     fanCyclesOff = 0
@@ -422,7 +422,7 @@ def fanControl(ambient, time):
             if sum(ambient) / 2 >= 30:
                 fanEnabled = True
     else:
-        if solarPin.read_uv() * 11 / 1000000 > 4.0 or usbPin.read_uv() * 11 / 1000000 > 4.0:
+        if vBusPin.read_uv() * 11 / 1000000 > 4.0 or battPin.read_uv() * 11 / 1000000 > 4.0:
             if sum(ambient) / 2 > 25:
                 fanEnabled = True
             else:
@@ -445,8 +445,8 @@ def main():
                      "SOLAR": False,
                      "USB": False,
                      "BATTV": 0.0,
-                     "SOLARV": 0.0,
-                     "USBV": 0.0,
+                     "VBUS": 0.0,
+                     "VSYS": 0.0,
                      "MAINV": 0.0}
         
         luxData = {"TOTAL":0,
@@ -616,20 +616,20 @@ def main():
        
         try:
             powerData["BATTV"] = battPin.read_uv() / 1000000 * 11
-            powerData["MAINV"] = solarPin.read_uv() / 1000000 * 11
-            #powerData["USBV"] = usbPin.read_uv() / 1000000 * 11
+            powerData["VBUS"] = vBusPin.read_uv() / 1000000 * 11
+            #powerData["US"] = battPin.read_uv() / 1000000 * 11
             
-            readings = [0] * 10
+            readings = [0] * 15
             processed = []
             for index, reading in enumerate(readings):
-                readings[index] = usbPin.read_uv() / 1000000 * 11
-                time.sleep_ms(100)
+                readings[index] = chargeOutPin.read_uv() / 1000000 * 11
+                time.sleep_ms(150)
                 
             for reading in readings:
                 if reading > statistics.stdev(readings):
                     processed.append(reading)
                     
-            powerData["USBV"] = statistics.mean(processed)
+            powerData["VSYS"] = statistics.mean(processed)
             
             if battPin.read_uv() / 10000000 > 0:
                 powerData["BATT"] = True
@@ -788,4 +788,3 @@ def main():
             pass
                         
 main()                        
-

@@ -249,4 +249,3 @@ def backup():
     backup = open('ugit.backup','w')
     backup.write(backup_text)
     backup.close()
-

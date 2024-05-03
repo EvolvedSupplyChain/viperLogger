@@ -2,6 +2,7 @@ import sys
 
 def print_stack():
     return "dummy value"
+    #return sys.print_exception(e)
 
 def format_tb(tb, limit):
     return ["traceback.format_tb() not implemented\n"]
