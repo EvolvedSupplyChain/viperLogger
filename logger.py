@@ -5,7 +5,7 @@ ESC Viper Logging Suite
 REQUIRED
 A. Liebig for ESC
 5/2/24
-Version 1.6
+Version 1.7
 '''
 
 import time
@@ -28,6 +28,7 @@ import os
 import statistics
 #import webrepl
 from umqttsimple import MQTTClient
+from ina219 import INA219 #current sensor
 
 #load the configuration:
 with open("config.json",'r') as f:
@@ -398,6 +399,8 @@ vBusPin = machine.ADC(4,atten=machine.ADC.ATTN_0DB)
 chargeOutPin = machine.ADC(5,atten=machine.ADC.ATTN_0DB)
 battPin = machine.ADC(6,atten=machine.ADC.ATTN_0DB)
 
+
+
 #Set up the vent fan:
 fanEnabled = False
 fanOverride = False
@@ -440,6 +443,7 @@ def main():
     global offlineMode
     while True:
         tempProbeValues = []
+        moistProbeRaw = []
         moistProbeValues = []
         powerData = {"BATT": False,
                      "SOLAR": False,
@@ -598,7 +602,10 @@ def main():
                 
             for pin in moistProbePins:
                 #moistProbeValues.append(pin.read_u16())
-                moistProbeValues.append(pin.read_uv() * 3.3 / 1000000)
+                moistProbeRaw.append(pin.read_uv() * 3.3 / 1000000)
+                
+            for value in moistProbeRaw:
+                moistProbeValues.append((value - 1.3)*(100 - 0)/(2.4 - 1.3) + 0)
             
             probeData = {}
             for index, temp in enumerate(tempProbeValues):
@@ -788,3 +795,4 @@ def main():
             pass
                         
 main()                        
+
