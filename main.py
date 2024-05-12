@@ -160,7 +160,7 @@ with open("config.json", 'r') as f:
     config = json.load(f)
 
 if config["LAUNCHREPL"]:
-    config["LAUNCHREPL"] = false
+    config["LAUNCHREPL"] = False
     with open("config.json",'w') as f:
         json.dump(config, f)
     

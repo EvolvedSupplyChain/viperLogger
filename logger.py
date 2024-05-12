@@ -199,9 +199,11 @@ def sub_cb(topic, msg):
         client.publish(ccTopic, json.dumps(config).encode())
         
     elif subject == "LAUNCHREPL":
-        config["REPL"] = True
+        config["LAUNCHREPL"] = True
         with open("config.json",'w') as f:
             json.dump(config,f)
+            
+        statusHandler("webrepl requested","launching repl")
         machine.reset()
         
     elif subject =="FACTORYRESET":
