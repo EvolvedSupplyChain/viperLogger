@@ -10,6 +10,7 @@ Version 1.5
 import json
 import machine
 import time
+import _thread
 
 buttonPin = machine.Pin(0,machine.Pin.IN,machine.Pin.PULL_UP)
 
@@ -179,12 +180,13 @@ if config["LAUNCHREPL"]:
     
     print(station.ifconfig()[0])
     #open a VPN connection so that webREPL will be local to azure network
-    debugShell = webrepl.Webrepl()
-    debugShell.start("escadmin")
+    #debugShell = webrepl._webrepl()
+    #debugShell.start("escadmin")
+    webrepl.start(password="escadmin")
     
-    while not debugShell.connected:
-        displayIP()
-        time.sleep(5)
+    #while not webrepl.connected:
+    _thread.start_new_thread(displayIP,())
+    time.sleep(2)
     
         
 elif config["FACTORYRESETFLAG"]:
