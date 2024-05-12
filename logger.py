@@ -4,8 +4,8 @@ Main Logging Loop
 ESC Viper Logging Suite
 REQUIRED
 A. Liebig for ESC
-5/2/24
-Version 1.6
+5/5/24
+Version 1.8
 '''
 
 import time
@@ -28,6 +28,10 @@ import os
 import statistics
 #import webrepl
 from umqttsimple import MQTTClient
+import ina219 #current sensor
+from logging import INFO
+import neopixel
+import _thread
 
 #load the configuration:
 with open("config.json",'r') as f:
@@ -55,7 +59,7 @@ client = MQTTClient(ubinascii.hexlify(machine.unique_id()), config["BROKER"], ke
 try:
     station = network.WLAN(network.STA_IF)
     station.active(True)
-    station.connect(config["SSID"], config["WIPASS"])
+    #station.connect(config["SSID"], config["WIPASS"])
 except Exception as error:
     #errorHandler("wifi setup", error, traceback.print_stack())
     print("wifi error")
@@ -65,15 +69,16 @@ firstConAttempts = 0
 
 while station.isconnected() == False:
     
+    station.connect(config["SSID"], config["WIPASS"])
     firstConAttempts += 1
     
-    if firstConAttempts < 10:
+    if firstConAttempts < 10 or firstConAttempts > 10:
         print("not connected")
         time.sleep(2)
         
     elif firstConAttempts == 10:
         print("having trouble connecting, waiting and trying again")
-        time.sleep(15)
+        time.sleep(30)
         
     elif firstConAttempts >= 20:
         print("can't make wifi connection, going to offline mode")
@@ -92,16 +97,18 @@ time.sleep(1)
 
 #log exceptions and stack trace
 def errorHandler(source, message, trace):
-    with open("errorlog.txt",'a') as f:
-        f.write("\nNew exception at " + str(rtClock.datetime()) + ": ")
-        f.write("\n\tSource: " + source + "\n\tMessage: " + str(message) + "\n\tTrace: " + str(trace) + "\n")
-        
+    try:
+        with open("errorlog.txt",'a') as f:
+            f.write("\nNew exception at " + str(rtClock.datetime()) + ": ")
+            f.write("\n\tSource: " + source + "\n\tMessage: " + str(message) + "\n\tTrace: " + str(trace) + "\n")
+    except Exception as error:
+        print(error)
     try:
         mem = gc.mem_free()
         logPayload = {
                         "Source": source,
-                        "Message": message,
-                        "Trace": trace,
+                        "Message": str(message),
+                        "Trace": str(trace),
                         "Mem": mem
                       }
         print(logPayload)
@@ -190,6 +197,12 @@ def sub_cb(topic, msg):
         '''
         print("send the config")
         client.publish(ccTopic, json.dumps(config).encode())
+        
+    elif subject == "LAUNCHREPL":
+        config["REPL"] = True
+        with open("config.json",'w') as f:
+            json.dump(config,f)
+        machine.reset()
 
     elif subject == "changeSetting":
         try:
@@ -317,7 +330,7 @@ else:
 
 #declare I2C and SPI busses for sensors:
 try:
-    sensorBus = machine.I2C(0,scl=machine.Pin(12),sda=machine.Pin(11))
+    sensorBus = machine.I2C(0,scl=machine.Pin(12),sda=machine.Pin(11),freq=100000)
     time.sleep(1)
 except Exception as error:
     errorHandler("I2C init", error, traceback.print_stack())
@@ -335,7 +348,7 @@ except Exception as error:
 else:
     totalLuxPresent = True
 #TODO: add totalLuxSense.gain = config["SENSORPREF"]["TSL2591"]["GAIN"]
-
+time.sleep(1)
 #spectral triad light sensor:
 #add I2C scan to make sure spectral triad is installed
 specTriadPresent = True
@@ -357,17 +370,22 @@ except Exception as error:
 #TODO: add specTriad.set_gain = config["SENSORPREF"]["TSL2591"]["GAIN"]
 
 #BME 280 Environmental Sensor
+bmePresent = True
+time.sleep(1)
 try:
     bmeAtmospheric = bme280.BME280(i2c=sensorBus)
 except Exception as error:
     errorHandler("BME 280 connection", error, traceback.print_stack())
+    bmePresent = False
     print(error)
 time.sleep(1)
 
 #SDC40 CO2 Sensor:
+scdPresent = True
 try:
     scd40CO2 = scd40.SCD4X(sensorBus)
 except Exception as error:
+    scdPresent = False
     print("co2 error")
     errorHandler("CO2 instantiate", error, traceback.print_stack())
 
@@ -381,27 +399,47 @@ time.sleep(1)
 #TODO: cross checking and correlation between BME 280 and SCD40 for temp, hum
 
 #Onewire Temp Probe Sensors:
+tempProbesPresent = True
 tempProbePin = machine.Pin(13)
 
 try:
     tempProbeBus = ds18x20.DS18X20(onewire.OneWire(tempProbePin))
     probeTemps = tempProbeBus.scan()
+    numTempProbes = probeTemps.length()
 except Exception as error:
+    tempProbesPresent = False
     errorHandler("temp probe init", error, traceback.print_stack())
 
 #Analog Moisture Probe Sensors:
-#TODO: THESE PINS ARE ALL WRONG.  PLACEHOLDER
-#TODO: publish voltage info regularly, status channel
-moistProbePins = [machine.ADC(2,atten=machine.ADC.ATTN_11DB),machine.ADC(3,atten=machine.ADC.ATTN_11DB),machine.ADC(7,atten=machine.ADC.ATTN_11DB)]
-#TODO: moisture probe power pin, switch off when not in use.
+#TODO: move moisture probe from 3 to 10, 3 is a strapping pin
+    
+moistProbePowerPin = machine.Pin(3,machine.Pin.OUT)
+moistProbePowerPin.value(0)
+moistProbePins = [machine.ADC(2,atten=machine.ADC.ATTN_11DB),machine.ADC(10,atten=machine.ADC.ATTN_11DB),machine.ADC(7,atten=machine.ADC.ATTN_11DB)]
+vBattPowerPin = machine.Pin(9,machine.Pin.OUT)
+vBattPowerPin.value(0)
+vSupplyPowerPin = machine.Pin(8,machine.Pin.OUT)
+vSupplyPowerPin.value(0)
 vBusPin = machine.ADC(4,atten=machine.ADC.ATTN_0DB)
 chargeOutPin = machine.ADC(5,atten=machine.ADC.ATTN_0DB)
 battPin = machine.ADC(6,atten=machine.ADC.ATTN_0DB)
 
+#TODO: define pins/bus for INA219 and instantiate the class
+#TODO: veryify bus pins
+inaPresent = True
+try:
+    #powerMonitorBus = machine.I2C(1,scl=machine.Pin(9), sda=machine.Pin(8))
+    mcuPower = ina219.INA219(0.1, sensorBus, log_level = INFO)
+    time.sleep(1)
+    mcuPower.configure()
+except Exception as error:
+    errorHandler("mcu power monitor initialize", error, traceback.print_stack())
+    inaPresent = False
+
 #Set up the vent fan:
 fanEnabled = False
 fanOverride = False
-fanPin = machine.Pin(1, machine.Pin.OUT)  #THIS IS NOT 4
+fanPin = machine.Pin(1, machine.Pin.OUT)
 fanPin.value(0)
 fanCyclesOn = 0
 fanCyclesOff = 0
@@ -432,6 +470,138 @@ def fanControl(ambient, time):
     
     return fanEnabled
 
+statusButton = machine.Pin(0,machine.Pin.IN,machine.Pin.PULL_UP)
+#TODO: make sure pin 1 is available
+#statusButton.irq(trigger = machine.Pin.IRQ_FALLING, handler = buttonHandler)
+
+def buttonHandler(pin):
+    startPress = time.time()
+    while statusButton.value() == 0:
+        pass
+    
+    timePressed = time.time() - startPress
+    
+    if timePressed >= 30:
+        factoryReset(config["VERSION"])
+        
+    elif timePressed >=10 and timePressed <=20:
+        config["LAUNCHREPL"] = True
+        try:
+            
+            with open("config.json",'w') as f:
+                json.dump(config,f)
+        except Exception as error:
+            print(error)
+        else:
+            machine.reset()
+            
+    elif timePressed > 0 and timePressed < 10:
+        displayStatus()
+        '''
+        import neopixel
+        statusLED = neopixel.NeoPixel(machine.Pin(15), 8)
+        for i in range(8):
+            statusLED[i]=(255,0,0)
+        statusLED.write()
+        time.sleep(2)
+        for i in range(8):
+            statusLED[i]=(0,255,0)
+        statusLED.write()
+        time.sleep(2)
+        for i in range(8):
+            statusLED[i]=(0,0,0)
+        statusLED.write()
+        '''
+    else:
+        #_thread.start_new_thread(displayStatus())
+        displayStatus()
+        
+statusButton.irq(trigger = machine.Pin.IRQ_FALLING, handler = buttonHandler)
+
+def statusCollector():
+    #TODO: flesh this out with more values and active checking for each
+    #TODO: add vbus detection to main logging loop and mark time present for calculating battfault
+    vBattPowerPin.value(1)
+    vSupplyPowerPin.value(1)
+    time.sleep(1)
+    boxStatus = {
+                "POWER": {
+                         "VBUS": True if vBusPin.read_uv() * 11 / 1000000 > 3.0 else False,
+                         "BATTCHARGED": True if battPin.read_uv() * 11 /1000000 > 3.9 else False,
+                         "BATTCRITICAL": True if battPin.read_uv() * 11 / 1000000 < 3.0 else False,
+                         "BATTFAULT": False
+                         },
+                "HARDWARE": {
+                            "SCD40": scdPresent,
+                            "BME280": bmePresent,
+                            "TSL2591": totalLuxPresent,
+                            "AS7265X": specTriadPresent,
+                            "INA219": inaPresent
+                            },
+                "CONECTIVITY": {
+                               "WIFI": station.isconnected(),
+                               "MQTT": True
+                               },
+                "MISC": {
+                        "UPDATEPENDING": False
+                        
+                        }
+                }
+    time.sleep(1)
+    vBattPowerPin.value(0)
+    vSupplyPowerPin.value(0)
+    return boxStatus
+
+def displayStatus():
+    #TODO: collect status data and activate LEDs
+    #TODO: this pin is most likely wrong, check what's available
+    status = statusCollector()
+    blink = [False,False,False,False]
+    ledState = []
+    # backup for led colors when switching all to 0 for blinking
+    #statusLED = neopixel.NeoPixel(machine.Pin(15), 8)
+    import ledHandler
+    leds = ledHandler.ledController(machine.Pin(15,machine.Pin.OUT), 8)
+    
+    if status["POWER"]["VBUS"] and status["POWER"]["BATTCHARGED"]:
+        #statusLED[0] = (0,256,0)
+        leds.set_one(green,0)
+    elif status["POWER"]["VBUS"] and not status["POWER"]["BATTCHARGED"]:
+        #statusLED[0] = (0,256,0)
+        led.set_one(green,0)
+        blink[0] = True
+    elif not status["POWER"]["VBUS"] and not status["POWER"]["BATTCRITICAL"]:
+        statusLED[0] = (128,128,0)
+    elif not status["POWER"]["VBUS"] and status["POWER"]["BATTCRITICAL"]:
+        statusLED[0] = (128,128,0)
+        blink[0] = True
+    
+    #statusLED.write()
+    leds.update_strip()
+    
+    
+def factoryReset(version, preserveConfig = False):
+    #TODO: preserveConfig logic and version checking
+    try:
+        os.rename("updatePaths.json", "updatePathsBak.json")
+        os.rename("factoryResetPaths.json","updatePaths.json")
+    except Exception as error:
+        print("could not change update paths")
+        #TODO: log this and try to recover
+    else:
+        config["FACTORYRESETFLAG"] = True
+        with open("config.json",'w') as f:
+            json.dump(config, f)
+    
+    try:
+        #TODO: send mqtt message indicating restore in progress
+        import ugit
+        ugit.pull_all()
+    except Exception as error:
+        print(error)
+        #TODO: log error and put update paths back into place
+        #TODO: make sure config.json is replaced by defaults and other cleanup is done on reboot before loading setup
+
 #Main logging loop:
 def main():
     global fanEnabled
@@ -440,14 +610,16 @@ def main():
     global offlineMode
     while True:
         tempProbeValues = []
+        moistProbeRaw = []
         moistProbeValues = []
         powerData = {"BATT": False,
                      "SOLAR": False,
                      "USB": False,
-                     "BATTV": 0.0,
+                     "VBATT": 0.0,
                      "VBUS": 0.0,
                      "VSYS": 0.0,
-                     "MAINV": 0.0}
+                     "VSUPPLY": 0.0,
+                     "ISYS": 0.0}
         
         luxData = {"TOTAL":0,
                    "IR":0,
@@ -595,10 +767,17 @@ def main():
             time.sleep_ms(800)
             for i in probeTemps:
                 tempProbeValues.append(tempProbeBus.read_temp(i))
-                
+            
+            moistProbePowerPin.value(1)
+            time.sleep(2)
+            
             for pin in moistProbePins:
                 #moistProbeValues.append(pin.read_u16())
-                moistProbeValues.append(pin.read_uv() * 3.3 / 1000000)
+                moistProbeRaw.append(pin.read_uv() * 3.3 / 1000000)
+                print(moistProbeRaw)
+                
+            for value in moistProbeRaw:
+                moistProbeValues.append((value - 1.5)*(100 - 0)/(2.8 - 1.5) + 0)
             
             probeData = {}
             for index, temp in enumerate(tempProbeValues):
@@ -608,16 +787,22 @@ def main():
             print(error)
             errorHandler("probe reading", error, traceback.print_stack())
             probeData = {"TEMP":0.0,"MOIST":0.0}
+        
+        finally:
+            moistProbePowerPin.value(0)
         #Battery voltage readings:
-        #TODO: choose an analog pin and set up appropriate voltage divider, maybe MCP chip
         #TODO: custom exceptions/types
         #TODO: exception logging, data storage in flash while offline, wifi detect/reconnect
-       
-       
+            #above is mostly done, needs refinement
+        vBattPowerPin.value(1)
+        vSupplyPowerPin.value(1)
+        time.sleep(2)
         try:
-            powerData["BATTV"] = battPin.read_uv() / 1000000 * 11
+            powerData["VBATT"] = battPin.read_uv() / 1000000 * 11
             powerData["VBUS"] = vBusPin.read_uv() / 1000000 * 11
             #powerData["US"] = battPin.read_uv() / 1000000 * 11
+            powerData["VSYS"] = mcuPower.voltage()
+            powerData["ISYS"] = mcuPower.current()
             
             readings = [0] * 15
             processed = []
@@ -629,7 +814,9 @@ def main():
                 if reading > statistics.stdev(readings):
                     processed.append(reading)
                     
-            powerData["VSYS"] = statistics.mean(processed)
+            powerData["VSUPPLY"] = statistics.mean(processed)
+            
+            #TODO: map INA219 readings to VSUPPLY and ISUPPLY
             
             if battPin.read_uv() / 10000000 > 0:
                 powerData["BATT"] = True
@@ -638,9 +825,15 @@ def main():
         except Exception as error:
             print(error)
         
-       
+        finally:
+            vBattPowerPin.value(0)
+            vSupplyPowerPin.value(0)
+        '''
+        try:
+           if powerData["VBUS"] >= 2.8:
+               if
         #multisampling voltage read:
-        
+        '''
         #build the json payload:
         mqttPayload = {
                         "node": config["NAME"],
@@ -659,6 +852,9 @@ def main():
         
         mqttPayload = json.dumps(mqttPayload)
         print(mqttPayload)
+        #send the payload, checking for wifi and mqtt connection or presence of offline mode flag
+        #TODO: combine this and the initial connect into a universal function,
+        #TODO: ping reciever on azure server to verify connection
         if not station.isconnected():
             if offlineMode:
                 with open("offlineData.txt",'a') as f:
@@ -690,7 +886,15 @@ def main():
                         try:
                             statusHandler("wifi recconect","wifi connection successfully restablished")
                         except:
-                            pass
+                            try:
+                                client.connect()
+                                client.subscribe(ccTopic)
+                                statusHandler("wifi recconect","wifi connection successfully restablished")
+                            except Exception as error:
+                                print(error)
+                                offlineMode = True
+                            else:
+                                offlineMode = False
                     else:
                         pass
         else:
@@ -748,11 +952,6 @@ def main():
                     os.remove("offlineData.txt")
                 except:
                     pass
-                           
-        if offlineMode:
-            time.sleep(config["OFFLINELOGINTERVAL"])
-        else:
-            time.sleep(config["LOGINTERVAL"])
         
         #TODO: power detection for fan control
         #fanPin.value(fanCheck)
@@ -766,7 +965,7 @@ def main():
         if fanOverride == True:
             pass
         else:
-            if atmosphericData["SCD40"]["TEMP"] >= 25:
+            if atmosphericData["SCD40"]["TEMP"] >= 27:
                 fanEnabled = True
                 fanPin.value(1)
             else:
@@ -778,6 +977,8 @@ def main():
         print(gc.mem_free())
         if gc.mem_free() * 1.5 < gc.mem_alloc():
             print("low mem")
+            machine.reset()
+            #TODO: figure out watchdog or do a manual reset here
             #memDog.feed()
         else:
             pass
@@ -786,5 +987,12 @@ def main():
             statusHandler("logging loop", "all systems normal")
         except:
             pass
+        
+        if offlineMode:
+            time.sleep(config["OFFLINELOGINTERVAL"])
+        else:
+            time.sleep(config["LOGINTERVAL"])
+            
                         
 main()                        
+
