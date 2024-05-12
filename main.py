@@ -177,7 +177,7 @@ if config["LAUNCHREPL"]:
         time.sleep(5)
     
     
-    print(station.ifconfig[0])
+    print(station.ifconfig()[0])
     #open a VPN connection so that webREPL will be local to azure network
     debugShell = webrepl.Webrepl()
     debugShell.start("escadmin")
