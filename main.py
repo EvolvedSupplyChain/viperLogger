@@ -191,7 +191,7 @@ elif config["FACTORYRESETFLAG"]:
     config["FACTORYRESETFLAG"] = False
     with open("config.json",'w') as f:
         json.dump(config,f)
-    import setup
+    #import setup
     
 else:
     import logger

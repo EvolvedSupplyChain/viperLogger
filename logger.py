@@ -203,6 +203,11 @@ def sub_cb(topic, msg):
         with open("config.json",'w') as f:
             json.dump(config,f)
         machine.reset()
+        
+    elif subject =="FACTORYRESET":
+        statusHandler("factory reset request","manual reset request recieved")
+        time.sleep(2)
+        factoryReset(config["VERSION"])
 
     elif subject == "changeSetting":
         try:
@@ -583,7 +588,8 @@ def displayStatus():
 def factoryReset(version, preserveConfig = False):
     #TODO: preserveConfig logic and version checking
     try:
-        os.rename("updatePaths.json", "updatePathsBak.json")
+        os.remove("updatePaths.json")
+        #os.rename("updatePaths.json", "updatePathsBak.json")
         os.rename("factoryResetPaths.json","updatePaths.json")
     except Exception as error:
         print("could not change update paths")
