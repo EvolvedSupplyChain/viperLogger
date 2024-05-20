@@ -154,7 +154,9 @@ def ledHandler(octets):
 def displayIP():
     octets = station.ifconfig()[0].split(".")
     #_thread.start_new_thread(ledHandler,(octets))
-    ledHandler(octets)
+    while True:
+        ledHandler(octets)
+        time.sleep(5)
 
 
 with open("config.json", 'r') as f:

@@ -18,7 +18,7 @@ import network
 import socket
 import ubinascii
 import machine
-import ugit #OTA Updater
+#import ugit #OTA Updater
 import scd40 #Atmospheric CO2 Sensor
 import gc
 import struct
@@ -204,6 +204,7 @@ def sub_cb(topic, msg):
             json.dump(config,f)
             
         statusHandler("webrepl requested","launching repl")
+        time.sleep(1)
         machine.reset()
         
     elif subject =="FACTORYRESET":
@@ -504,6 +505,7 @@ def buttonHandler(pin):
             
     elif timePressed > 0 and timePressed < 10:
         displayStatus()
+        #_thread.start_new_thread(displayStatus,())
         '''
         import neopixel
         statusLED = neopixel.NeoPixel(machine.Pin(15), 8)
@@ -572,10 +574,10 @@ def displayStatus():
     
     if status["POWER"]["VBUS"] and status["POWER"]["BATTCHARGED"]:
         #statusLED[0] = (0,256,0)
-        leds.set_one(green,0)
+        leds.set_single(ledHandler.green,0)
     elif status["POWER"]["VBUS"] and not status["POWER"]["BATTCHARGED"]:
         #statusLED[0] = (0,256,0)
-        led.set_one(green,0)
+        leds.set_single(ledHandler.green,0)
         blink[0] = True
     elif not status["POWER"]["VBUS"] and not status["POWER"]["BATTCRITICAL"]:
         statusLED[0] = (128,128,0)
@@ -585,6 +587,11 @@ def displayStatus():
     
     #statusLED.write()
     leds.update_strip()
+    time.sleep(5)
+    leds.all_off_now()
+    time.sleep(1)
+    #_thread.exit()
+    
     
     
 def factoryReset(version, preserveConfig = False):
